@@ -26,7 +26,7 @@ export default function Home() {
       >   <DashboardHeader />  </MotionWrapperDelay>
 
       <section className="container mx-auto py-10 sm:py-20 text-center px-4">
-        <UserButton appearance={{ elements: { avatarBox: "w-16 h-16" } }} />
+
         <MotionWrapperDelay
           initial="hidden"
           whileInView="visible"
@@ -38,9 +38,9 @@ export default function Home() {
           }}
         >
           <h1 className="text-4xl sm:text-6xl lg:text-8xl font-extrabold gradient-title pb-6 flex flex-col items-center  ">
-            Your Place To Create <br /> Videos with custom themes and audio...
+            Your Place To Practice  <br /> Any Interview Of Your Choice...
             <span className="flex flex-col items-center justify-center gap-2 sm:gap-4 w-full mt-4">
-              <span className="text-2xl sm:text-6xl">with</span>
+              <span className="text-2xl sm:text-6xl"></span>
               <MotionWrapperDelay
                 initial="hidden"
                 whileInView="visible"
@@ -73,7 +73,7 @@ export default function Home() {
             visible: { opacity: 1, x: 0 },
           }}
         >   <span className="text-2xl sm:text-6xl gradient-title -mt-2 mb-6">
-            Choose Your Video Image Style And Create With Ease...
+            Chose Your Job Postion Your Applying For And Let AI Generate Questions...
           </span></MotionWrapperDelay>
 
         <MotionWrapperDelay
@@ -86,7 +86,7 @@ export default function Home() {
             visible: { opacity: 1, y: 0 },
           }}
         >   <p className="text-base sm:text-xl text-indigo-600 mb-6 sm:mb-10 max-w-3xl mx-auto mt-5">
-            Create Short Videos with your chosen style, with text to speech and beautiful animations...
+            Well create Questions And Capture Your Answers And Give You A Score Out Of 10 With The Stats And Correct Answers For Further Practice... Including The Option To Record Your Interview And Download The Video
           </p>  </MotionWrapperDelay>
 
 

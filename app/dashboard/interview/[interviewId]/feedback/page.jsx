@@ -204,6 +204,7 @@ import FeatureMotionWrapper from '@/app/_components/FramerMotion/FeatureMotionWr
 import { Button } from '@/components/ui/button'
 import { useRouter } from 'next/navigation'
 import confetti from "canvas-confetti"
+import Image from 'next/image';
 
 function FeedbackClient({ params }) {
     const interviewId = React.use(params).interviewId; // Unwrap the params promise
@@ -284,11 +285,18 @@ function FeedbackClient({ params }) {
     }
 
     return (
-        <div className='p-10 bg-white relative overflow-hidden'>
+        <div className='p-10 bg-white rounded-lg relative overflow-hidden mt-10'>
             <SmokeEffect isVisible={true} />
 
             {feedbackList?.length == 0 ? (
-                <h2 className='font-bold text-xl text-indigo-500'>No Interview Feedback Record Found</h2>
+                <><h2 className='font-bold text-xl text-indigo-500'>No Interview Feedback Record Found Return And Create It...</h2><Image
+                    src="https://images.pexels.com/photos/1882309/pexels-photo-1882309.jpeg?auto=compress&cs=tinysrgb&w=1200"
+                    alt="Success Image"
+                    width={500}
+                    height={433}
+                    className="rounded-lg shadow-lg grayscale" // Added 'grayscale' class
+                    priority /></>
+
             ) : (
                 <>
                     <SparklesText text="Congratulations!" className="text-4xl font-bold text-purple-900 mb-4" />
