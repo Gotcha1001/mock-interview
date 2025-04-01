@@ -1,4 +1,3 @@
-
 "use client";
 
 import { Button } from '@/components/ui/button';
@@ -6,7 +5,7 @@ import Image from 'next/image';
 import React, { useRef, useState, useEffect } from 'react';
 import Webcam from 'react-webcam';
 import { BiSolidVideoRecording } from "react-icons/bi";
-import { Mic } from 'lucide-react';
+import { Mic, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { chatSession } from '@/utils/GeminiAIModel';
 import { db } from '@/utils/db';
@@ -20,142 +19,312 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
     const [userAnswer, setUserAnswer] = useState('');
     const [loading, setLoading] = useState(false);
     const [processing, setProcessing] = useState(false);
+    const [recognitionError, setRecognitionError] = useState(null);
+    const [recognitionReady, setRecognitionReady] = useState(true);
 
     const webcamRef = useRef(null);
     const recognitionRef = useRef(null);
     const isRecognitionActiveRef = useRef(false);
+    const transcriptRef = useRef('');
+    const restartAttemptsRef = useRef(0);
 
     const { user } = useUser();
 
+    // Initialize speech recognition
     useEffect(() => {
         if (typeof window === 'undefined') return;
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) return;
+
+        if (!SpeechRecognition) {
+            console.warn("Speech recognition not supported in this browser");
+            setRecognitionReady(false);
+            return;
+        }
 
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
-        recognition.interimResults = false;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
 
         recognition.onresult = (event) => {
-            const transcript = event.results[event.results.length - 1][0].transcript;
-            console.log("Captured Speech:", transcript);
-            setUserAnswer(prev => prev + " " + transcript);
+            let interimTranscript = '';
+            let finalTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript + ' ';
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+
+            // Update the transcript reference with any final results
+            if (finalTranscript) {
+                transcriptRef.current += finalTranscript;
+                setRecognitionError(null); // Clear any previous errors when we get results
+            }
+
+            // Set the user answer state with all transcript content
+            setUserAnswer(transcriptRef.current + interimTranscript);
+        };
+
+        recognition.onerror = (event) => {
+            console.error("Speech Recognition Error:", event.error);
+            setRecognitionError(event.error);
+
+            if (event.error === 'no-speech') {
+                console.log("No speech detected but continuing anyway");
+                // We'll continue recording despite no speech
+            } else if (event.error === 'aborted' || event.error === 'network') {
+                isRecognitionActiveRef.current = false;
+
+                // Only attempt restart if we're still supposed to be recording
+                if (isRecordingNow && restartAttemptsRef.current < 3) {
+                    restartAttemptsRef.current++;
+                    console.log(`Attempting to restart recognition (${restartAttemptsRef.current}/3)`);
+
+                    setTimeout(() => {
+                        if (isRecordingNow) {
+                            startSpeechToText(true); // Force restart
+                        }
+                    }, 500);
+                }
+            }
+        };
+
+        recognition.onend = () => {
+            console.log("Speech recognition ended naturally");
+            isRecognitionActiveRef.current = false;
+
+            // If we're still supposed to be recording, restart
+            if (isRecordingNow && restartAttemptsRef.current < 3) {
+                restartAttemptsRef.current++;
+                console.log(`Restarting recognition after end (${restartAttemptsRef.current}/3)`);
+
+                setTimeout(() => {
+                    if (isRecordingNow) {
+                        startSpeechToText(true);
+                    }
+                }, 300);
+            }
         };
 
         recognitionRef.current = recognition;
 
+        // Clean up function
         return () => {
             if (recognitionRef.current && isRecognitionActiveRef.current) {
-                recognitionRef.current.stop();
+                try {
+                    recognitionRef.current.stop();
+                } catch (error) {
+                    console.error("Error stopping recognition during cleanup:", error);
+                }
                 isRecognitionActiveRef.current = false;
             }
         };
-    }, []);
+    }, []);  // Only run once on mount
 
+    // Process answer when recording stops and we're in loading state
     useEffect(() => {
-        // Only process the answer if we stopped recording and have sufficient content
-        if (!isRecordingNow && userAnswer.trim().length > 10 && !processing) {
+        if (!isRecordingNow && !processing && loading) {
             setProcessing(true);
             updateUserAnswer();
         }
-    }, [isRecordingNow, userAnswer]);
+    }, [isRecordingNow, loading, processing]);
 
-    const startSpeechToText = () => {
-        if (recognitionRef.current && !isRecognitionActiveRef.current) {
+    const startSpeechToText = (forceRestart = false) => {
+        if (!recognitionRef.current) {
+            toast.error("Speech recognition not available");
+            setIsRecordingNow(false);
+            return;
+        }
+
+        if (isRecognitionActiveRef.current && forceRestart) {
             try {
-                recognitionRef.current.start();
-                isRecognitionActiveRef.current = true;
+                recognitionRef.current.stop();
+                isRecognitionActiveRef.current = false;
+            } catch (error) {
+                console.error("Error stopping recognition before restart:", error);
+            }
+        }
+
+        if (!isRecognitionActiveRef.current) {
+            try {
+                if (forceRestart) {
+                    // Small delay before restarting to ensure clean state
+                    setTimeout(() => {
+                        recognitionRef.current.start();
+                        isRecognitionActiveRef.current = true;
+                        console.log("Speech recognition restarted forcefully");
+                    }, 200);
+                } else {
+                    recognitionRef.current.start();
+                    isRecognitionActiveRef.current = true;
+                    console.log("Speech recognition started");
+                }
+                setRecognitionError(null);
             } catch (error) {
                 console.error("Error starting recognition:", error);
                 toast.error("Failed to start speech recognition");
                 setIsRecordingNow(false);
+                setRecognitionError("start_error");
             }
         }
     };
 
     const stopSpeechToText = () => {
+        restartAttemptsRef.current = 0; // Reset restart counter
+
         if (recognitionRef.current && isRecognitionActiveRef.current) {
             try {
                 recognitionRef.current.stop();
                 isRecognitionActiveRef.current = false;
+                console.log("Speech recognition stopped manually");
             } catch (error) {
                 console.error("Error stopping recognition:", error);
+                isRecognitionActiveRef.current = false;
             }
         }
     };
 
     const StartStopRecording = async () => {
         if (!isRecordingNow) {
-            setUserAnswer(''); // Clear previous answer when starting a new recording
+            // Starting recording
+            setUserAnswer('');
+            transcriptRef.current = '';
             setIsRecordingNow(true);
+            setLoading(false);
+            setProcessing(false);
+            restartAttemptsRef.current = 0;
             startSpeechToText();
         } else {
+            // Stopping recording
             setIsRecordingNow(false);
             stopSpeechToText();
-            setLoading(true);
+
+            // Use a timeout to ensure all final results are captured
+            setTimeout(() => {
+                setLoading(true);
+            }, 500);
         }
     };
 
     const updateUserAnswer = async () => {
-        console.log("Processing answer:", userAnswer);
-
-        if (userAnswer.trim().length < 10) {
-            toast.error("Answer is too short. Please record again.");
-            setLoading(false);
-            setProcessing(false);
-            return;
-        }
-
         try {
-            const feedbackPrompt = "Questions:" + mockInterviewQuestion[activeQuestionIndex]?.question +
-                ", User Answer:" + userAnswer + ",Depends on the question and the users answer for the given interview question" +
-                "please give us the rating for the answer and feedback as an area for improvement if any " +
-                "in just 3 to 5 lines to improve it in JSON format with the rating field and feeback field";
+            // Get the final transcript - anything is valid, even empty responses
+            const answerToProcess = userAnswer.trim() || "User provided non-verbal response";
+            console.log("Processing answer:", answerToProcess);
 
-            const result = await chatSession.sendMessage(feedbackPrompt);
-            const mockJsonResp = result.response.text();
-            console.log(mockJsonResp);
+            let JsonFeedbackResp = { rating: "N/A", feedback: "No feedback available" };
 
-            let JsonFeedbackResp;
-            try {
-                JsonFeedbackResp = JSON.parse(mockJsonResp);
-            } catch (parseError) {
-                console.error("Error parsing JSON response:", parseError);
-                toast.error("Error processing feedback. Please try again.");
-                setLoading(false);
-                setProcessing(false);
-                return;
+            // Only request AI feedback if we have a substantial answer
+            if (answerToProcess !== "User provided non-verbal response" && answerToProcess.length > 5) {
+                try {
+                    const feedbackPrompt = "Questions:" + mockInterviewQuestion[activeQuestionIndex]?.question +
+                        ", User Answer:" + answerToProcess + ",Depends on the question and the users answer for the given interview question" +
+                        "please give us the rating for the answer and feedback as an area for improvement if any " +
+                        "in just 3 to 5 lines to improve it in JSON format with the rating field and feeback field";
+
+                    const result = await chatSession.sendMessage(feedbackPrompt);
+                    const mockJsonResp = result.response.text();
+                    console.log("AI Response:", mockJsonResp);
+
+                    try {
+                        JsonFeedbackResp = JSON.parse(mockJsonResp);
+                    } catch (parseError) {
+                        console.error("Error parsing JSON response:", parseError);
+                        JsonFeedbackResp = {
+                            rating: "N/A",
+                            feedback: "Unable to analyze response. Please try again."
+                        };
+                    }
+                } catch (aiError) {
+                    console.error("Error getting AI feedback:", aiError);
+                }
             }
 
-            // Save it to the database
+            // Always save whatever we have to the database
             const resp = await db.insert(UserAnswer)
                 .values({
                     mockIdRef: interviewData?.mockId,
                     question: mockInterviewQuestion[activeQuestionIndex]?.question,
                     correctAns: mockInterviewQuestion[activeQuestionIndex]?.answer,
-                    userAns: userAnswer,
-                    feedback: JsonFeedbackResp?.feedback,
-                    rating: JsonFeedbackResp?.rating,
+                    userAns: answerToProcess,
+                    feedback: JsonFeedbackResp?.feedback || "No feedback available",
+                    rating: JsonFeedbackResp?.rating || "N/A",
                     userEmail: user?.primaryEmailAddress?.emailAddress,
                     createdAt: moment().format('DD-MM-yyyy')
                 });
 
             if (resp) {
-                toast('User Answer Recorded Successfully...🍄');
+                toast('Answer recorded successfully 🍄');
             }
         } catch (error) {
-            console.error("Error saving user answer:", error);
-            toast.error("Failed to save answer. Please try again.");
+            console.error("Error in updateUserAnswer:", error);
+
+            // Still try to save what we have to the database
+            try {
+                await db.insert(UserAnswer)
+                    .values({
+                        mockIdRef: interviewData?.mockId,
+                        question: mockInterviewQuestion[activeQuestionIndex]?.question,
+                        correctAns: mockInterviewQuestion[activeQuestionIndex]?.answer,
+                        userAns: userAnswer.trim() || "User provided non-verbal response",
+                        feedback: "Error processing feedback",
+                        rating: "N/A",
+                        userEmail: user?.primaryEmailAddress?.emailAddress,
+                        createdAt: moment().format('DD-MM-yyyy')
+                    });
+
+                toast('Answer recorded with basic feedback');
+            } catch (dbError) {
+                console.error("Database error:", dbError);
+                toast.error("Failed to save answer");
+            }
         } finally {
-            // Ensure loading state is reset regardless of success or failure
-            setUserAnswer('');
             setLoading(false);
             setProcessing(false);
         }
     };
 
     const handleUserMedia = () => setCameraReady(true);
+
+    const resetSpeechRecognition = () => {
+        // Complete reset of the speech recognition system
+        stopSpeechToText();
+
+        if (recognitionRef.current) {
+            // Create a new instance of speech recognition
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                const newRecognition = new SpeechRecognition();
+                newRecognition.continuous = true;
+                newRecognition.interimResults = true;
+                newRecognition.lang = 'en-US';
+
+                newRecognition.onresult = recognitionRef.current.onresult;
+                newRecognition.onerror = recognitionRef.current.onerror;
+                newRecognition.onend = recognitionRef.current.onend;
+
+                recognitionRef.current = newRecognition;
+                setRecognitionError(null);
+                setRecognitionReady(true);
+
+                toast('Speech recognition reset');
+            }
+        }
+
+        // Reset all state
+        setIsRecordingNow(false);
+        setLoading(false);
+        setProcessing(false);
+        setUserAnswer('');
+        transcriptRef.current = '';
+        restartAttemptsRef.current = 0;
+    };
 
     return (
         <div className='flex flex-col items-center justify-center'>
@@ -179,30 +348,281 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
                 />
             </div>
 
-            <Button
-                disabled={loading || processing}
-                className="my-10 flex items-center gap-2"
-                variant="sex2"
-                onClick={StartStopRecording}
-            >
-                <BiSolidVideoRecording />
-                {isRecordingNow ? (
-                    <span className="text-red-600 flex items-center gap-1 font-bold">
-                        <Mic /> Stop Recording
-                    </span>
-                ) : (
-                    'Record Answer'
+            <div className="flex flex-col items-center gap-4 my-10">
+                {/* Speech recognition status indicator */}
+                {recognitionError && (
+                    <div className="text-amber-600 text-sm mb-1 flex items-center gap-1">
+                        <span>Speech recognition issue: {recognitionError}</span>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={resetSpeechRecognition}
+                            className="p-1 h-6"
+                        >
+                            <RefreshCw size={14} />
+                        </Button>
+                    </div>
                 )}
-            </Button>
 
-            {(loading || processing) && (
-                <p className="text-sm text-gray-500">Processing your answer...</p>
-            )}
+                <Button
+                    disabled={loading || processing || !recognitionReady}
+                    className="flex items-center gap-2"
+                    variant="sex2"
+                    onClick={StartStopRecording}
+                >
+                    <BiSolidVideoRecording />
+                    {isRecordingNow ? (
+                        <span className="text-red-600 flex items-center gap-1 font-bold">
+                            <Mic /> Stop Recording
+                        </span>
+                    ) : (
+                        'Record Answer'
+                    )}
+                </Button>
+
+                {/* Visual feedback of speech being detected */}
+                {isRecordingNow && (
+                    <div className="text-sm max-w-md overflow-hidden">
+                        {userAnswer ? (
+                            <span className="text-green-600">
+                                <span className="font-bold">Speech detected:</span>
+                                {userAnswer.length > 50 ?
+                                    `${userAnswer.substring(0, 50)}...` :
+                                    userAnswer
+                                }
+                            </span>
+                        ) : (
+                            <span className="text-amber-600">Waiting for speech...</span>
+                        )}
+                    </div>
+                )}
+
+                {(loading || processing) && (
+                    <p className="text-sm text-gray-500">Processing your answer...</p>
+                )}
+
+                {(loading || processing || recognitionError) && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2"
+                        onClick={resetSpeechRecognition}
+                    >
+                        Reset Recording System
+                    </Button>
+                )}
+            </div>
         </div>
     );
 }
 
 export default RecordAnswerSection;
+
+
+// "use client";
+
+// import { Button } from '@/components/ui/button';
+// import Image from 'next/image';
+// import React, { useRef, useState, useEffect } from 'react';
+// import Webcam from 'react-webcam';
+// import { BiSolidVideoRecording } from "react-icons/bi";
+// import { Mic } from 'lucide-react';
+// import { toast } from 'sonner';
+// import { chatSession } from '@/utils/GeminiAIModel';
+// import { db } from '@/utils/db';
+// import { UserAnswer } from '@/utils/schema';
+// import { useUser } from '@clerk/nextjs';
+// import moment from 'moment';
+
+// function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, interviewData }) {
+//     const [isRecordingNow, setIsRecordingNow] = useState(false);
+//     const [cameraReady, setCameraReady] = useState(false);
+//     const [userAnswer, setUserAnswer] = useState('');
+//     const [loading, setLoading] = useState(false);
+//     const [processing, setProcessing] = useState(false);
+
+//     const webcamRef = useRef(null);
+//     const recognitionRef = useRef(null);
+//     const isRecognitionActiveRef = useRef(false);
+
+//     const { user } = useUser();
+
+//     useEffect(() => {
+//         if (typeof window === 'undefined') return;
+
+//         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+//         if (!SpeechRecognition) return;
+
+//         const recognition = new SpeechRecognition();
+//         recognition.continuous = true;
+//         recognition.interimResults = false;
+
+//         recognition.onresult = (event) => {
+//             const transcript = event.results[event.results.length - 1][0].transcript;
+//             console.log("Captured Speech:", transcript);
+//             setUserAnswer(prev => prev + " " + transcript);
+//         };
+
+//         recognitionRef.current = recognition;
+
+//         return () => {
+//             if (recognitionRef.current && isRecognitionActiveRef.current) {
+//                 recognitionRef.current.stop();
+//                 isRecognitionActiveRef.current = false;
+//             }
+//         };
+//     }, []);
+
+//     useEffect(() => {
+//         // Only process the answer if we stopped recording and have sufficient content
+//         if (!isRecordingNow && userAnswer.trim().length > 10 && !processing) {
+//             setProcessing(true);
+//             updateUserAnswer();
+//         }
+//     }, [isRecordingNow, userAnswer]);
+
+//     const startSpeechToText = () => {
+//         if (recognitionRef.current && !isRecognitionActiveRef.current) {
+//             try {
+//                 recognitionRef.current.start();
+//                 isRecognitionActiveRef.current = true;
+//             } catch (error) {
+//                 console.error("Error starting recognition:", error);
+//                 toast.error("Failed to start speech recognition");
+//                 setIsRecordingNow(false);
+//             }
+//         }
+//     };
+
+//     const stopSpeechToText = () => {
+//         if (recognitionRef.current && isRecognitionActiveRef.current) {
+//             try {
+//                 recognitionRef.current.stop();
+//                 isRecognitionActiveRef.current = false;
+//             } catch (error) {
+//                 console.error("Error stopping recognition:", error);
+//             }
+//         }
+//     };
+
+//     const StartStopRecording = async () => {
+//         if (!isRecordingNow) {
+//             setUserAnswer(''); // Clear previous answer when starting a new recording
+//             setIsRecordingNow(true);
+//             startSpeechToText();
+//         } else {
+//             setIsRecordingNow(false);
+//             stopSpeechToText();
+//             setLoading(true);
+//         }
+//     };
+
+//     const updateUserAnswer = async () => {
+//         console.log("Processing answer:", userAnswer);
+
+//         if (userAnswer.trim().length < 10) {
+//             toast.error("Answer is too short. Please record again.");
+//             setLoading(false);
+//             setProcessing(false);
+//             return;
+//         }
+
+//         try {
+//             const feedbackPrompt = "Questions:" + mockInterviewQuestion[activeQuestionIndex]?.question +
+//                 ", User Answer:" + userAnswer + ",Depends on the question and the users answer for the given interview question" +
+//                 "please give us the rating for the answer and feedback as an area for improvement if any " +
+//                 "in just 3 to 5 lines to improve it in JSON format with the rating field and feeback field";
+
+//             const result = await chatSession.sendMessage(feedbackPrompt);
+//             const mockJsonResp = result.response.text();
+//             console.log(mockJsonResp);
+
+//             let JsonFeedbackResp;
+//             try {
+//                 JsonFeedbackResp = JSON.parse(mockJsonResp);
+//             } catch (parseError) {
+//                 console.error("Error parsing JSON response:", parseError);
+//                 toast.error("Error processing feedback. Please try again.");
+//                 setLoading(false);
+//                 setProcessing(false);
+//                 return;
+//             }
+
+//             // Save it to the database
+//             const resp = await db.insert(UserAnswer)
+//                 .values({
+//                     mockIdRef: interviewData?.mockId,
+//                     question: mockInterviewQuestion[activeQuestionIndex]?.question,
+//                     correctAns: mockInterviewQuestion[activeQuestionIndex]?.answer,
+//                     userAns: userAnswer,
+//                     feedback: JsonFeedbackResp?.feedback,
+//                     rating: JsonFeedbackResp?.rating,
+//                     userEmail: user?.primaryEmailAddress?.emailAddress,
+//                     createdAt: moment().format('DD-MM-yyyy')
+//                 });
+
+//             if (resp) {
+//                 toast('User Answer Recorded Successfully...🍄');
+//             }
+//         } catch (error) {
+//             console.error("Error saving user answer:", error);
+//             toast.error("Failed to save answer. Please try again.");
+//         } finally {
+//             // Ensure loading state is reset regardless of success or failure
+//             setUserAnswer('');
+//             setLoading(false);
+//             setProcessing(false);
+//         }
+//     };
+
+//     const handleUserMedia = () => setCameraReady(true);
+
+//     return (
+//         <div className='flex flex-col items-center justify-center'>
+//             <div className='mt-20 flex flex-col justify-center items-center gradient-background2 rounded-lg p-5 relative' style={{ height: 300 }}>
+//                 {!cameraReady && (
+//                     <div className="absolute inset-0 flex justify-center items-center">
+//                         <Image src={'/camera2.jpg'} alt='Camera' height={200} width={200} className='rounded-lg' />
+//                     </div>
+//                 )}
+//                 <Webcam
+//                     ref={webcamRef}
+//                     mirrored
+//                     onUserMedia={handleUserMedia}
+//                     style={{
+//                         height: '100%',
+//                         width: '100%',
+//                         zIndex: cameraReady ? 10 : 0,
+//                         borderRadius: 10,
+//                         filter: 'contrast(1.6)',
+//                     }}
+//                 />
+//             </div>
+
+//             <Button
+//                 disabled={loading || processing}
+//                 className="my-10 flex items-center gap-2"
+//                 variant="sex2"
+//                 onClick={StartStopRecording}
+//             >
+//                 <BiSolidVideoRecording />
+//                 {isRecordingNow ? (
+//                     <span className="text-red-600 flex items-center gap-1 font-bold">
+//                         <Mic /> Stop Recording
+//                     </span>
+//                 ) : (
+//                     'Record Answer'
+//                 )}
+//             </Button>
+
+//             {(loading || processing) && (
+//                 <p className="text-sm text-gray-500">Processing your answer...</p>
+//             )}
+//         </div>
+//     );
+// }
+
+// export default RecordAnswerSection;
 
 
 // ORIGIONAL WORKING OF THE AUDIO RECORDING AND SAVING TO DATA BASE AND NICE STYLING
