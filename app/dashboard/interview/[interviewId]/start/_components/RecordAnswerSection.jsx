@@ -1,9 +1,4 @@
 
-
-
-
-// ORIGIONAL WORKING OF THE AUDIO RECORDING AND SAVING TO DATA BASE AND NICE STYLING
-
 "use client";
 
 import { Button } from '@/components/ui/button';
@@ -19,18 +14,18 @@ import { UserAnswer } from '@/utils/schema';
 import { useUser } from '@clerk/nextjs';
 import moment from 'moment';
 
-
 function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, interviewData }) {
     const [isRecordingNow, setIsRecordingNow] = useState(false);
     const [cameraReady, setCameraReady] = useState(false);
     const [userAnswer, setUserAnswer] = useState('');
-    const [loading, setLoading] = useState(false)
+    const [loading, setLoading] = useState(false);
+    const [processing, setProcessing] = useState(false);
 
     const webcamRef = useRef(null);
     const recognitionRef = useRef(null);
     const isRecognitionActiveRef = useRef(false);
 
-    const { user } = useUser()
+    const { user } = useUser();
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -59,14 +54,12 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
     }, []);
 
     useEffect(() => {
-        if (!isRecordingNow && userAnswer.length > 10) {
-            updateUserAnswer()
+        // Only process the answer if we stopped recording and have sufficient content
+        if (!isRecordingNow && userAnswer.trim().length > 10 && !processing) {
+            setProcessing(true);
+            updateUserAnswer();
         }
-        // if (userAnswer?.length < 10) {
-        //     toast.error("Error while saving your answer, Please record again");
-        //     return;
-        // }
-    }, [userAnswer])
+    }, [isRecordingNow, userAnswer]);
 
     const startSpeechToText = () => {
         if (recognitionRef.current && !isRecognitionActiveRef.current) {
@@ -75,6 +68,8 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
                 isRecognitionActiveRef.current = true;
             } catch (error) {
                 console.error("Error starting recognition:", error);
+                toast.error("Failed to start speech recognition");
+                setIsRecordingNow(false);
             }
         }
     };
@@ -90,40 +85,48 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
         }
     };
 
-
-
     const StartStopRecording = async () => {
         if (!isRecordingNow) {
+            setUserAnswer(''); // Clear previous answer when starting a new recording
             setIsRecordingNow(true);
             startSpeechToText();
-            return;
+        } else {
+            setIsRecordingNow(false);
+            stopSpeechToText();
+            setLoading(true);
         }
-
-        setIsRecordingNow(false);
-        stopSpeechToText();
-
-
-
-        setLoading(true);
-
-
     };
 
     const updateUserAnswer = async () => {
+        console.log("Processing answer:", userAnswer);
 
-        console.log(userAnswer)
-
-        setLoading(true)
-        const feedbackPrompt = "Questions:" + mockInterviewQuestion[activeQuestionIndex]?.question +
-            ", User Answer:" + userAnswer + ",Depends on the question and the users answer for the given interview question" +
-            "please give us the rating for the answer and feedback as an area for improvement if any " +
-            "in just 3 to 5 lines to improve it in JSON format with the rating field and feeback field";
+        if (userAnswer.trim().length < 10) {
+            toast.error("Answer is too short. Please record again.");
+            setLoading(false);
+            setProcessing(false);
+            return;
+        }
 
         try {
+            const feedbackPrompt = "Questions:" + mockInterviewQuestion[activeQuestionIndex]?.question +
+                ", User Answer:" + userAnswer + ",Depends on the question and the users answer for the given interview question" +
+                "please give us the rating for the answer and feedback as an area for improvement if any " +
+                "in just 3 to 5 lines to improve it in JSON format with the rating field and feeback field";
+
             const result = await chatSession.sendMessage(feedbackPrompt);
             const mockJsonResp = result.response.text();
             console.log(mockJsonResp);
-            const JsonFeedbackResp = JSON.parse(mockJsonResp);
+
+            let JsonFeedbackResp;
+            try {
+                JsonFeedbackResp = JSON.parse(mockJsonResp);
+            } catch (parseError) {
+                console.error("Error parsing JSON response:", parseError);
+                toast.error("Error processing feedback. Please try again.");
+                setLoading(false);
+                setProcessing(false);
+                return;
+            }
 
             // Save it to the database
             const resp = await db.insert(UserAnswer)
@@ -144,12 +147,13 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
         } catch (error) {
             console.error("Error saving user answer:", error);
             toast.error("Failed to save answer. Please try again.");
+        } finally {
+            // Ensure loading state is reset regardless of success or failure
+            setUserAnswer('');
+            setLoading(false);
+            setProcessing(false);
         }
-        setUserAnswer('')
-        setLoading(false);
-    }
-
-
+    };
 
     const handleUserMedia = () => setCameraReady(true);
 
@@ -176,10 +180,10 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
             </div>
 
             <Button
-                disabled={loading}
+                disabled={loading || processing}
                 className="my-10 flex items-center gap-2"
                 variant="sex2"
-                onClick={StartStopRecording} // Call SaveUserAnswer instead of handleRecordButtonClick
+                onClick={StartStopRecording}
             >
                 <BiSolidVideoRecording />
                 {isRecordingNow ? (
@@ -190,11 +194,210 @@ function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, inter
                     'Record Answer'
                 )}
             </Button>
+
+            {(loading || processing) && (
+                <p className="text-sm text-gray-500">Processing your answer...</p>
+            )}
         </div>
     );
 }
 
 export default RecordAnswerSection;
+
+
+// ORIGIONAL WORKING OF THE AUDIO RECORDING AND SAVING TO DATA BASE AND NICE STYLING
+
+// "use client";
+
+// import { Button } from '@/components/ui/button';
+// import Image from 'next/image';
+// import React, { useRef, useState, useEffect } from 'react';
+// import Webcam from 'react-webcam';
+// import { BiSolidVideoRecording } from "react-icons/bi";
+// import { Mic } from 'lucide-react';
+// import { toast } from 'sonner';
+// import { chatSession } from '@/utils/GeminiAIModel';
+// import { db } from '@/utils/db';
+// import { UserAnswer } from '@/utils/schema';
+// import { useUser } from '@clerk/nextjs';
+// import moment from 'moment';
+
+
+// function RecordAnswerSection({ mockInterviewQuestion, activeQuestionIndex, interviewData }) {
+//     const [isRecordingNow, setIsRecordingNow] = useState(false);
+//     const [cameraReady, setCameraReady] = useState(false);
+//     const [userAnswer, setUserAnswer] = useState('');
+//     const [loading, setLoading] = useState(false)
+
+//     const webcamRef = useRef(null);
+//     const recognitionRef = useRef(null);
+//     const isRecognitionActiveRef = useRef(false);
+
+//     const { user } = useUser()
+
+//     useEffect(() => {
+//         if (typeof window === 'undefined') return;
+
+//         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+//         if (!SpeechRecognition) return;
+
+//         const recognition = new SpeechRecognition();
+//         recognition.continuous = true;
+//         recognition.interimResults = false;
+
+//         recognition.onresult = (event) => {
+//             const transcript = event.results[event.results.length - 1][0].transcript;
+//             console.log("Captured Speech:", transcript);
+//             setUserAnswer(prev => prev + " " + transcript);
+//         };
+
+//         recognitionRef.current = recognition;
+
+//         return () => {
+//             if (recognitionRef.current && isRecognitionActiveRef.current) {
+//                 recognitionRef.current.stop();
+//                 isRecognitionActiveRef.current = false;
+//             }
+//         };
+//     }, []);
+
+//     useEffect(() => {
+//         if (!isRecordingNow && userAnswer.length > 10) {
+//             updateUserAnswer()
+//         }
+//         // if (userAnswer?.length < 10) {
+//         //     toast.error("Error while saving your answer, Please record again");
+//         //     return;
+//         // }
+//     }, [userAnswer])
+
+//     const startSpeechToText = () => {
+//         if (recognitionRef.current && !isRecognitionActiveRef.current) {
+//             try {
+//                 recognitionRef.current.start();
+//                 isRecognitionActiveRef.current = true;
+//             } catch (error) {
+//                 console.error("Error starting recognition:", error);
+//             }
+//         }
+//     };
+
+//     const stopSpeechToText = () => {
+//         if (recognitionRef.current && isRecognitionActiveRef.current) {
+//             try {
+//                 recognitionRef.current.stop();
+//                 isRecognitionActiveRef.current = false;
+//             } catch (error) {
+//                 console.error("Error stopping recognition:", error);
+//             }
+//         }
+//     };
+
+
+
+//     const StartStopRecording = async () => {
+//         if (!isRecordingNow) {
+//             setIsRecordingNow(true);
+//             startSpeechToText();
+//             return;
+//         }
+
+//         setIsRecordingNow(false);
+//         stopSpeechToText();
+
+
+
+//         setLoading(true);
+
+
+//     };
+
+//     const updateUserAnswer = async () => {
+
+//         console.log(userAnswer)
+
+//         setLoading(true)
+//         const feedbackPrompt = "Questions:" + mockInterviewQuestion[activeQuestionIndex]?.question +
+//             ", User Answer:" + userAnswer + ",Depends on the question and the users answer for the given interview question" +
+//             "please give us the rating for the answer and feedback as an area for improvement if any " +
+//             "in just 3 to 5 lines to improve it in JSON format with the rating field and feeback field";
+
+//         try {
+//             const result = await chatSession.sendMessage(feedbackPrompt);
+//             const mockJsonResp = result.response.text();
+//             console.log(mockJsonResp);
+//             const JsonFeedbackResp = JSON.parse(mockJsonResp);
+
+//             // Save it to the database
+//             const resp = await db.insert(UserAnswer)
+//                 .values({
+//                     mockIdRef: interviewData?.mockId,
+//                     question: mockInterviewQuestion[activeQuestionIndex]?.question,
+//                     correctAns: mockInterviewQuestion[activeQuestionIndex]?.answer,
+//                     userAns: userAnswer,
+//                     feedback: JsonFeedbackResp?.feedback,
+//                     rating: JsonFeedbackResp?.rating,
+//                     userEmail: user?.primaryEmailAddress?.emailAddress,
+//                     createdAt: moment().format('DD-MM-yyyy')
+//                 });
+
+//             if (resp) {
+//                 toast('User Answer Recorded Successfully...🍄');
+//             }
+//         } catch (error) {
+//             console.error("Error saving user answer:", error);
+//             toast.error("Failed to save answer. Please try again.");
+//         }
+//         setUserAnswer('')
+//         setLoading(false);
+//     }
+
+
+
+//     const handleUserMedia = () => setCameraReady(true);
+
+//     return (
+//         <div className='flex flex-col items-center justify-center'>
+//             <div className='mt-20 flex flex-col justify-center items-center gradient-background2 rounded-lg p-5 relative' style={{ height: 300 }}>
+//                 {!cameraReady && (
+//                     <div className="absolute inset-0 flex justify-center items-center">
+//                         <Image src={'/camera2.jpg'} alt='Camera' height={200} width={200} className='rounded-lg' />
+//                     </div>
+//                 )}
+//                 <Webcam
+//                     ref={webcamRef}
+//                     mirrored
+//                     onUserMedia={handleUserMedia}
+//                     style={{
+//                         height: '100%',
+//                         width: '100%',
+//                         zIndex: cameraReady ? 10 : 0,
+//                         borderRadius: 10,
+//                         filter: 'contrast(1.6)',
+//                     }}
+//                 />
+//             </div>
+
+//             <Button
+//                 disabled={loading}
+//                 className="my-10 flex items-center gap-2"
+//                 variant="sex2"
+//                 onClick={StartStopRecording} // Call SaveUserAnswer instead of handleRecordButtonClick
+//             >
+//                 <BiSolidVideoRecording />
+//                 {isRecordingNow ? (
+//                     <span className="text-red-600 flex items-center gap-1 font-bold">
+//                         <Mic /> Stop Recording
+//                     </span>
+//                 ) : (
+//                     'Record Answer'
+//                 )}
+//             </Button>
+//         </div>
+//     );
+// }
+
+// export default RecordAnswerSection;
 
 
 
